@@ -9,37 +9,65 @@ const nsIAppStartup = Ci.nsIAppStartup_MOZILLA_2_0 || Ci.nsIAppStartup;
 Components.utils.import('resource://gre/modules/XPCOMUtils.jsm');
 Components.utils.import('resource://gre/modules/Services.jsm');
 
-function AboutStartup() {}
+/**
+ * An XPCOM thing to help redirector about:... pages to an underlying URI.
+ */
+function AboutRedirector(cid, name, uri) {
+  this.cid = cid;
+  this.name = name;
+  this.uri = Services.io.newURI(uri, null, null);
+}
 
-AboutStartup.prototype = {
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAboutModule]),
-  classDescription: 'about:startup',
-  classID: Components.ID('{ef5c36bf-8559-4449-8133-03e30e83c708}'),
-  contractID: '@mozilla.org/network/protocol/about;1?what=startup',
+AboutRedirector.prototype = {
+  QueryInterface: XPCOMUtils.generateQI([
+    Components.interfaces.nsIAboutModule,
+    Components.interfaces.nsISupportsWeakReference
+  ]),
 
-  newChannel: function(uri)
-  {
-    var channel = Services.io.newChannel('resource://aboutstartup/aboutstartup.html', null, null);
-    var securityManager = Cc['@mozilla.org/scriptsecuritymanager;1'].getService(Ci.nsIScriptSecurityManager);
-    var principal = securityManager.getSystemPrincipal(uri);
-    channel.originalURI = uri;
-    channel.owner = principal;
+  register: function register() {
+    let registrar = Components.manager.QueryInterface(
+      Components.interfaces.nsIComponentRegistrar);
+    registrar.registerFactory(
+      this.cid, "about:" + this.name,
+      "@mozilla.org/network/protocol/about;1?what=" + this.name, this);
+  },
+
+  unload: function unload() {
+    let registrar = Components.manager.QueryInterface(
+      Components.interfaces.nsIComponentRegistrar);
+    registrar.unregisterFactory(this.cid, this);
+  },
+
+  // nsIAboutModule
+
+  getURIFlags: function getURIFlags(aURI) {
+    return 0;
+  },
+
+  newChannel: function newChannel(aURI) {
+    let channel = Services.io.newChannelFromURI(this.uri);
+    channel.originalURI = aURI;
     return channel;
   },
 
-  getURIFlags: function(uri)
-  {
-    return Ci.nsIAboutModule.URI_SAFE_FOR_UNTRUSTED_CONTENT | Ci.nsIAboutModule.ALLOW_SCRIPT;
+  // nsIFactory
+
+  createInstance: function createInstance(outer, iid) {
+    if (outer != null) {
+      throw Components.results.NS_ERROR_NO_AGGREGATION;
+    }
+    return this.QueryInterface(iid);
   }
 };
 
-const AboutStartupFactory = XPCOMUtils.generateNSGetFactory([AboutStartup])(AboutStartup.prototype.classID);
+const redirector = new AboutRedirector(
+  Components.ID('{ef5c36bf-8559-4449-8133-03e30e83c708}'),
+  'startup',
+  'chrome://aboutstartup/content/aboutstartup.html'
+);
 
 function startup(aData, aReason) {
-  Cm.registerFactory(AboutStartup.prototype.classID,
-                     AboutStartup.prototype.classDescription,
-                     AboutStartup.prototype.contractID,
-                     AboutStartupFactory);
+  redirector.register();
   var fileuri = Services.io.newFileURI(aData.installPath);
   if (!aData.installPath.isDirectory())
     fileuri = Services.io.newURI('jar:' + fileuri.spec + '!/', null, null);
@@ -61,7 +89,7 @@ function shutdown(aData, aReason) {
     patchTBWindow.shutdown();
   }
   Services.io.getProtocolHandler('resource').QueryInterface(Ci.nsIResProtocolHandler).setSubstitution('aboutstartup', null);
-  Cm.unregisterFactory(AboutStartup.prototype.classID, AboutStartupFactory);
+  redirector.unload();
 }
 function install(aData, aReason) { }
 function uninstall(aData, aReason) { }
